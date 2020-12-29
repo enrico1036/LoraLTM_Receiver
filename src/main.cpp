@@ -3,6 +3,16 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <LightTelemetry.h>
+#include <LoRa.h>
+
+
+#define UPDATE_PERIOD 1000
+
+#define LORA_FREQ 868E6
+#define LORA_TX_POWER 20
+#define LORA_BANDWIDTH 31.25E3
+#define LORA_CODING_RATE 6
 
 BLEServer *pServer = NULL;
 BLECharacteristic *pLatCharacteristic, *pLonCharacteristic, *pSatsCharacteristic;
@@ -13,6 +23,17 @@ uint8_t txValue = 0;
 double latitude = 43.885699;
 double longitude = 13.353804;
 uint8_t sats = 5;
+
+#define MAX_LORA_PACKET_SIZE 100
+#define LORA_RX_TIMEOUT 2000
+uint8_t loraRxBuffer[MAX_LORA_PACKET_SIZE];
+uint8_t loraRxBytes;
+int availableLoraBytes = 0;
+uint32_t lastLoraReceived = 0;
+
+uint32_t timer = 0;
+
+void onLoraReceive(int bytes);
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -53,6 +74,19 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
 void setup() {
   Serial.begin(115200);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
+	LoRa.begin(LORA_FREQ);
+	LoRa.sleep();
+	LoRa.enableCrc();
+	LoRa.setTxPower(LORA_TX_POWER, PA_OUTPUT_PA_BOOST_PIN);
+	LoRa.setSignalBandwidth(LORA_BANDWIDTH);
+	LoRa.setCodingRate4(LORA_CODING_RATE);
+	LoRa.idle();
+  LoRa.onReceive(onLoraReceive);
+  LoRa.receive();
 
   // Create the BLE Device
   BLEDevice::init("LoraLTM_receiver");
@@ -105,26 +139,73 @@ void setup() {
 
 void loop() {
 
-    if (deviceConnected) {
-        pLatCharacteristic->setValue(latitude);
-        pLatCharacteristic->notify();
-        pLonCharacteristic->setValue(longitude);
-        pLonCharacteristic->notify();
-        pSatsCharacteristic->setValue(&sats, 1);
-        pSatsCharacteristic->notify();
-		delay(1000); // bluetooth stack will go into congestion, if too many packets are sent
-	}
+  if (millis() - timer > UPDATE_PERIOD)
+  {
+    timer = millis();
+    
+  }
 
-    // disconnecting
-    if (!deviceConnected && oldDeviceConnected) {
-        delay(500); // give the bluetooth stack the chance to get things ready
-        pServer->startAdvertising(); // restart advertising
-        Serial.println("start advertising");
-        oldDeviceConnected = deviceConnected;
+  // disconnecting
+  if (!deviceConnected && oldDeviceConnected)
+  {
+    delay(500);                  // give the bluetooth stack the chance to get things ready
+    pServer->startAdvertising(); // restart advertising
+    Serial.println("start advertising");
+    oldDeviceConnected = deviceConnected;
+  }
+  // connecting
+  if (deviceConnected && !oldDeviceConnected)
+  {
+    // do stuff here on connecting
+    oldDeviceConnected = deviceConnected;
+  }
+
+  if (availableLoraBytes > 0)
+  {
+    loraRxBytes = LoRa.readBytes(loraRxBuffer, availableLoraBytes <= MAX_LORA_PACKET_SIZE ? availableLoraBytes : MAX_LORA_PACKET_SIZE);
+    // Serial.print("RSSI: ");
+    // Serial.print(157 - constrain(LoRa.packetRssi() * -1, 0, 157));
+    // Serial.print(" SNR: ");
+    // Serial.println(LoRa.packetSnr());
+    Serial.write(loraRxBuffer, loraRxBytes);
+    LTM_reader::read(loraRxBuffer, loraRxBytes);
+    Serial.print("ok: ");
+    Serial.print(LTM_reader::LTM_pkt_ok, 10);
+    Serial.print(" ko: ");
+    Serial.println(LTM_reader::LTM_pkt_ko, 10);
+    Serial.print("lat: ");
+    Serial.print(LTM_reader::uav_lat, 10);
+    Serial.print(" lon: ");
+    Serial.print(LTM_reader::uav_lon, 10);
+    Serial.print(" sat: ");
+    Serial.println(LTM_reader::uav_satellites_visible, 10);
+    if (deviceConnected)
+    {
+      pLatCharacteristic->setValue(LTM_reader::uav_lat);
+      pLatCharacteristic->notify();
+      pLonCharacteristic->setValue(LTM_reader::uav_lon);
+      pLonCharacteristic->notify();
+      pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
+      pSatsCharacteristic->notify();
     }
-    // connecting
-    if (deviceConnected && !oldDeviceConnected) {
-		// do stuff here on connecting
-        oldDeviceConnected = deviceConnected;
-    }
+    // Serial.println();
+    availableLoraBytes = 0;
+  }
+
+  if ((lastLoraReceived + LORA_RX_TIMEOUT) > millis())
+	{
+		//timeout
+		digitalWrite(LED_BUILTIN, HIGH);
+	}
+	else
+	{
+		//correct receiving
+		digitalWrite(LED_BUILTIN, LOW);
+	}
+}
+
+void onLoraReceive(int bytes)
+{
+  availableLoraBytes = bytes;
+  lastLoraReceived = millis();
 }
