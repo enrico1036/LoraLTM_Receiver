@@ -6,16 +6,20 @@
 #include <LightTelemetry.h>
 #include <LoRa.h>
 
+const char *ssid = "TP-LINK";
+const char *password = "pass2016";
+const char *hostname = "LoraLTM_Receiver";
 
 #define UPDATE_PERIOD 1000
 
 #define LORA_FREQ 868E6
 #define LORA_TX_POWER 20
-#define LORA_BANDWIDTH 31.25E3
-#define LORA_CODING_RATE 6
+#define LORA_BANDWIDTH 62.5E3
+#define LORA_CODING_RATE 5
+#define LORA_SPREADING_FACTOR 12
 
 BLEServer *pServer = NULL;
-BLECharacteristic *pLatCharacteristic, *pLonCharacteristic, *pSatsCharacteristic;
+BLECharacteristic *pLatCharacteristic, *pLonCharacteristic, *pSatsCharacteristic, *pConnCharacteristic;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 uint8_t txValue = 0;
@@ -25,11 +29,12 @@ double longitude = 13.353804;
 uint8_t sats = 5;
 
 #define MAX_LORA_PACKET_SIZE 100
-#define LORA_RX_TIMEOUT 2000
+#define LORA_RX_TIMEOUT 10000
 uint8_t loraRxBuffer[MAX_LORA_PACKET_SIZE];
 uint8_t loraRxBytes;
 int availableLoraBytes = 0;
 uint32_t lastLoraReceived = 0;
+uint8_t loraConnected = false;
 
 uint32_t timer = 0;
 
@@ -38,174 +43,182 @@ void onLoraReceive(int bytes);
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
-#define SERVICE_UUID           "87127120-6346-402b-a352-cf32bc95f3e8" // Custom GPS service UUID
+#define SERVICE_UUID "87127120-6346-402b-a352-cf32bc95f3e8" // Custom GPS service UUID
 #define CHARACTERISTIC_UUID_RX "87127121-6346-402b-a352-cf32bc95f3e8"
 #define CHARACTERISTIC_UUID_LAT "87127122-6346-402b-a352-cf32bc95f3e8"
 #define CHARACTERISTIC_UUID_LON "87127123-6346-402b-a352-cf32bc95f3e8"
 #define CHARACTERISTIC_UUID_SATS "87127124-6346-402b-a352-cf32bc95f3e8"
+#define CHARACTERISTIC_UUID_CONN "87127125-6346-402b-a352-cf32bc95f3e8"
 
+class MyServerCallbacks : public BLEServerCallbacks
+{
+	void onConnect(BLEServer *pServer)
+	{
+		deviceConnected = true;
+		Serial.println("Connected");
+	};
 
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-    }
+	void onDisconnect(BLEServer *pServer)
+	{
+		deviceConnected = false;
+		Serial.println("Disconnected");
+	}
 };
 
-class MyCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string rxValue = pCharacteristic->getValue();
+class MyCallbacks : public BLECharacteristicCallbacks
+{
+	void onWrite(BLECharacteristic *pCharacteristic)
+	{
+		std::string rxValue = pCharacteristic->getValue();
 
-      if (rxValue.length() > 0) {
-        Serial.println("*********");
-        Serial.print("Received Value: ");
-        for (int i = 0; i < rxValue.length(); i++)
-          Serial.print(rxValue[i]);
+		if (rxValue.length() > 0)
+		{
+			Serial.println("*********");
+			Serial.print("Received Value: ");
+			for (int i = 0; i < rxValue.length(); i++)
+				Serial.print(rxValue[i]);
 
-        Serial.println();
-        Serial.println("*********");
-      }
-    }
+			Serial.println();
+			Serial.println("*********");
+		}
+	}
 };
 
+void setup()
+{
+	Serial.begin(115200);
 
-void setup() {
-  Serial.begin(115200);
+	pinMode(LED_BUILTIN, OUTPUT);
+	digitalWrite(LED_BUILTIN, HIGH);
 
-  pinMode(LED_BUILTIN, OUTPUT);
-
-  LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
+	LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
 	LoRa.begin(LORA_FREQ);
 	LoRa.sleep();
 	LoRa.enableCrc();
 	LoRa.setTxPower(LORA_TX_POWER, PA_OUTPUT_PA_BOOST_PIN);
 	LoRa.setSignalBandwidth(LORA_BANDWIDTH);
 	LoRa.setCodingRate4(LORA_CODING_RATE);
+	LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
 	LoRa.idle();
-  LoRa.onReceive(onLoraReceive);
-  LoRa.receive();
+	LoRa.onReceive(onLoraReceive);
+	LoRa.receive();
 
-  // Create the BLE Device
-  BLEDevice::init("LoraLTM_receiver");
+	// Create the BLE Device
+	BLEDevice::init(hostname);
 
-  // Create the BLE Server
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+	// Create the BLE Server
+	pServer = BLEDevice::createServer();
+	pServer->setCallbacks(new MyServerCallbacks());
 
-  // Create the BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+	// Create the BLE Service
+	BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // Create a BLE Characteristic
-  pLatCharacteristic = pService->createCharacteristic(
-										CHARACTERISTIC_UUID_LAT,
-										BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ
-									);
-                      
-  // pLatCharacteristic->addDescriptor(new BLE2902());
+	// Create a BLE Characteristic
+	pLatCharacteristic = pService->createCharacteristic(
+		CHARACTERISTIC_UUID_LAT,
+		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
 
-  pLonCharacteristic = pService->createCharacteristic(
-										CHARACTERISTIC_UUID_LON,
-										BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ
-									);
-                      
-  // pLonCharacteristic->addDescriptor(new BLE2902());
+	// pLatCharacteristic->addDescriptor(new BLE2902());
 
-  pSatsCharacteristic = pService->createCharacteristic(
-										CHARACTERISTIC_UUID_SATS,
-										BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ
-									);
-                      
-  // pSatsCharacteristic->addDescriptor(new BLE2902());
+	pLonCharacteristic = pService->createCharacteristic(
+		CHARACTERISTIC_UUID_LON,
+		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
 
-  BLECharacteristic * pRxCharacteristic = pService->createCharacteristic(
-											 CHARACTERISTIC_UUID_RX,
-											BLECharacteristic::PROPERTY_WRITE
-										);
+	// pLonCharacteristic->addDescriptor(new BLE2902());
 
-  pRxCharacteristic->setCallbacks(new MyCallbacks());
+	pSatsCharacteristic = pService->createCharacteristic(
+		CHARACTERISTIC_UUID_SATS,
+		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
 
-  // Start the service
-  pService->start();
+	// pSatsCharacteristic->addDescriptor(new BLE2902());
 
-  // Start advertising
-  BLEAdvertising *pAdvertising = pServer->getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->start();
-  Serial.println("Waiting a client connection to notify...");
+	pConnCharacteristic = pService->createCharacteristic(
+		CHARACTERISTIC_UUID_CONN,
+		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
+
+	// pSatsCharacteristic->addDescriptor(new BLE2902());
+
+	BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+		CHARACTERISTIC_UUID_RX,
+		BLECharacteristic::PROPERTY_WRITE);
+
+	pRxCharacteristic->setCallbacks(new MyCallbacks());
+
+	// Start the service
+	pService->start();
+
+	// Start advertising
+	BLEAdvertising *pAdvertising = pServer->getAdvertising();
+	pAdvertising->addServiceUUID(SERVICE_UUID);
+	pAdvertising->start();
+	Serial.println("Waiting a client connection to notify...");
+
+	delay(1000);
 }
 
-void loop() {
+void loop()
+{
 
-  if (millis() - timer > UPDATE_PERIOD)
-  {
-    timer = millis();
-    
-  }
+	if (millis() - timer > UPDATE_PERIOD)
+	{
+		timer = millis();
+	}
 
-  // disconnecting
-  if (!deviceConnected && oldDeviceConnected)
-  {
-    delay(500);                  // give the bluetooth stack the chance to get things ready
-    pServer->startAdvertising(); // restart advertising
-    Serial.println("start advertising");
-    oldDeviceConnected = deviceConnected;
-  }
-  // connecting
-  if (deviceConnected && !oldDeviceConnected)
-  {
-    // do stuff here on connecting
-    oldDeviceConnected = deviceConnected;
-  }
+	// // disconnecting
+	// if (!deviceConnected && oldDeviceConnected)
+	// {
+	// 	delay(500);					 // give the bluetooth stack the chance to get things ready
+	// 	pServer->startAdvertising(); // restart advertising
+	// 	Serial.println("start advertising");
+	// 	oldDeviceConnected = deviceConnected;
+	// }
+	// // connecting
+	// if (deviceConnected && !oldDeviceConnected)
+	// {
+	// 	// do stuff here on connecting
+	// 	oldDeviceConnected = deviceConnected;
+	// }
 
-  if (availableLoraBytes > 0)
-  {
-    loraRxBytes = LoRa.readBytes(loraRxBuffer, availableLoraBytes <= MAX_LORA_PACKET_SIZE ? availableLoraBytes : MAX_LORA_PACKET_SIZE);
-    // Serial.print("RSSI: ");
-    // Serial.print(157 - constrain(LoRa.packetRssi() * -1, 0, 157));
-    // Serial.print(" SNR: ");
-    // Serial.println(LoRa.packetSnr());
-    Serial.write(loraRxBuffer, loraRxBytes);
-    LTM_reader::read(loraRxBuffer, loraRxBytes);
-    Serial.print("ok: ");
-    Serial.print(LTM_reader::LTM_pkt_ok, 10);
-    Serial.print(" ko: ");
-    Serial.println(LTM_reader::LTM_pkt_ko, 10);
-    Serial.print("lat: ");
-    Serial.print(LTM_reader::uav_lat, 10);
-    Serial.print(" lon: ");
-    Serial.print(LTM_reader::uav_lon, 10);
-    Serial.print(" sat: ");
-    Serial.println(LTM_reader::uav_satellites_visible, 10);
-    if (deviceConnected)
-    {
-      pLatCharacteristic->setValue(LTM_reader::uav_lat);
-      pLatCharacteristic->notify();
-      pLonCharacteristic->setValue(LTM_reader::uav_lon);
-      pLonCharacteristic->notify();
-      pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
-      pSatsCharacteristic->notify();
-    }
-    // Serial.println();
-    availableLoraBytes = 0;
-  }
+	if (availableLoraBytes > 0)
+	{
+		loraRxBytes = LoRa.readBytes(loraRxBuffer, availableLoraBytes <= MAX_LORA_PACKET_SIZE ? availableLoraBytes : MAX_LORA_PACKET_SIZE);
+		// Serial.print("RSSI: ");
+		// Serial.print(157 - constrain(LoRa.packetRssi() * -1, 0, 157));
+		// Serial.print(" SNR: ");
+		// Serial.println(LoRa.packetSnr());
+		Serial.write(loraRxBuffer, loraRxBytes);
+		LTM_reader::read(loraRxBuffer, loraRxBytes);
+		pLatCharacteristic->setValue(LTM_reader::uav_lat);
+		pLonCharacteristic->setValue(LTM_reader::uav_lon);
+		pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
+		pConnCharacteristic->setValue(&loraConnected, 1);
+		if (deviceConnected)
+		{
+			pLatCharacteristic->notify();
+			pLonCharacteristic->notify();
+			pSatsCharacteristic->notify();
+			pConnCharacteristic->notify();
+		}
+		// Serial.println();
+		availableLoraBytes = 0;
+	}
 
-  if ((lastLoraReceived + LORA_RX_TIMEOUT) > millis())
+	if((millis() - lastLoraReceived) > LORA_RX_TIMEOUT)
 	{
 		//timeout
-		digitalWrite(LED_BUILTIN, HIGH);
+		loraConnected = false;
 	}
 	else
 	{
 		//correct receiving
-		digitalWrite(LED_BUILTIN, LOW);
+		loraConnected = true;
 	}
+
+	digitalWrite(LED_BUILTIN, loraConnected);
 }
 
 void onLoraReceive(int bytes)
 {
-  availableLoraBytes = bytes;
-  lastLoraReceived = millis();
+	availableLoraBytes = bytes;
+	lastLoraReceived = millis();
 }
