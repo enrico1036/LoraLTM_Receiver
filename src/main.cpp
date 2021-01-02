@@ -192,13 +192,10 @@ void loop()
 		pLonCharacteristic->setValue(LTM_reader::uav_lon);
 		pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
 		pConnCharacteristic->setValue(&loraConnected, 1);
-		if (deviceConnected)
-		{
-			pLatCharacteristic->notify();
-			pLonCharacteristic->notify();
-			pSatsCharacteristic->notify();
-			pConnCharacteristic->notify();
-		}
+		pLatCharacteristic->notify();
+		pLonCharacteristic->notify();
+		pSatsCharacteristic->notify();
+		pConnCharacteristic->notify();
 		// Serial.println();
 		availableLoraBytes = 0;
 	}
