@@ -1,10 +1,8 @@
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include <LightTelemetry.h>
 #include <LoRa.h>
+#include "ble/ble.hpp"
+#include "ota/ota.hpp"
 
 const char *ssid = "TP-LINK";
 const char *password = "pass2016";
@@ -17,12 +15,6 @@ const char *hostname = "LoraLTM_Receiver";
 #define LORA_BANDWIDTH 62.5E3
 #define LORA_CODING_RATE 5
 #define LORA_SPREADING_FACTOR 12
-
-BLEServer *pServer = NULL;
-BLECharacteristic *pLatCharacteristic, *pLonCharacteristic, *pSatsCharacteristic, *pConnCharacteristic;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-uint8_t txValue = 0;
 
 double latitude = 43.885699;
 double longitude = 13.353804;
@@ -37,52 +29,9 @@ uint32_t lastLoraReceived = 0;
 uint8_t loraConnected = false;
 
 uint32_t timer = 0;
+uint8_t start_retry_count = 0;
 
 void onLoraReceive(int bytes);
-
-// See the following for generating UUIDs:
-// https://www.uuidgenerator.net/
-
-#define SERVICE_UUID "87127120-6346-402b-a352-cf32bc95f3e8" // Custom GPS service UUID
-#define CHARACTERISTIC_UUID_RX "87127121-6346-402b-a352-cf32bc95f3e8"
-#define CHARACTERISTIC_UUID_LAT "87127122-6346-402b-a352-cf32bc95f3e8"
-#define CHARACTERISTIC_UUID_LON "87127123-6346-402b-a352-cf32bc95f3e8"
-#define CHARACTERISTIC_UUID_SATS "87127124-6346-402b-a352-cf32bc95f3e8"
-#define CHARACTERISTIC_UUID_CONN "87127125-6346-402b-a352-cf32bc95f3e8"
-
-class MyServerCallbacks : public BLEServerCallbacks
-{
-	void onConnect(BLEServer *pServer)
-	{
-		deviceConnected = true;
-		Serial.println("Connected");
-	};
-
-	void onDisconnect(BLEServer *pServer)
-	{
-		deviceConnected = false;
-		Serial.println("Disconnected");
-	}
-};
-
-class MyCallbacks : public BLECharacteristicCallbacks
-{
-	void onWrite(BLECharacteristic *pCharacteristic)
-	{
-		std::string rxValue = pCharacteristic->getValue();
-
-		if (rxValue.length() > 0)
-		{
-			Serial.println("*********");
-			Serial.print("Received Value: ");
-			for (int i = 0; i < rxValue.length(); i++)
-				Serial.print(rxValue[i]);
-
-			Serial.println();
-			Serial.println("*********");
-		}
-	}
-};
 
 void setup()
 {
@@ -90,6 +39,28 @@ void setup()
 
 	pinMode(LED_BUILTIN, OUTPUT);
 	digitalWrite(LED_BUILTIN, HIGH);
+
+	Serial.println("Booting");
+	WiFi.mode(WIFI_STA);
+	WiFi.begin(ssid, password);
+	while (WiFi.waitForConnectResult() != WL_CONNECTED)
+	{
+		Serial.println("Connection Failed! Retry...");
+		delay(1000);
+		if(++start_retry_count >= 5)
+		{
+			Serial.println("Connection Failed! Give up");
+			break;
+		}
+	}
+
+	OTA_setup(hostname);
+
+	Serial.println("Ready");
+	Serial.print("IP address: ");
+	Serial.println(WiFi.localIP());
+
+	BLE_setup(hostname);
 
 	LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
 	LoRa.begin(LORA_FREQ);
@@ -103,81 +74,19 @@ void setup()
 	LoRa.onReceive(onLoraReceive);
 	LoRa.receive();
 
-	// Create the BLE Device
-	BLEDevice::init(hostname);
-
-	// Create the BLE Server
-	pServer = BLEDevice::createServer();
-	pServer->setCallbacks(new MyServerCallbacks());
-
-	// Create the BLE Service
-	BLEService *pService = pServer->createService(SERVICE_UUID);
-
-	// Create a BLE Characteristic
-	pLatCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_LAT,
-		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-
-	// pLatCharacteristic->addDescriptor(new BLE2902());
-
-	pLonCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_LON,
-		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-
-	// pLonCharacteristic->addDescriptor(new BLE2902());
-
-	pSatsCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_SATS,
-		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-
-	// pSatsCharacteristic->addDescriptor(new BLE2902());
-
-	pConnCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_CONN,
-		BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-
-	// pSatsCharacteristic->addDescriptor(new BLE2902());
-
-	BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_RX,
-		BLECharacteristic::PROPERTY_WRITE);
-
-	pRxCharacteristic->setCallbacks(new MyCallbacks());
-
-	// Start the service
-	pService->start();
-
-	// Start advertising
-	BLEAdvertising *pAdvertising = pServer->getAdvertising();
-	pAdvertising->addServiceUUID(SERVICE_UUID);
-	pAdvertising->start();
-	Serial.println("Waiting a client connection to notify...");
-
 	delay(1000);
 }
 
 void loop()
 {
+	ArduinoOTA.handle();
 
 	if (millis() - timer > UPDATE_PERIOD)
 	{
 		timer = millis();
+		pConnCharacteristic->setValue(&loraConnected, 1);
+		pConnCharacteristic->notify();
 	}
-
-	// // disconnecting
-	// if (!deviceConnected && oldDeviceConnected)
-	// {
-	// 	delay(500);					 // give the bluetooth stack the chance to get things ready
-	// 	pServer->startAdvertising(); // restart advertising
-	// 	Serial.println("start advertising");
-	// 	oldDeviceConnected = deviceConnected;
-	// }
-	// // connecting
-	// if (deviceConnected && !oldDeviceConnected)
-	// {
-	// 	// do stuff here on connecting
-	// 	oldDeviceConnected = deviceConnected;
-	// }
 
 	if (availableLoraBytes > 0)
 	{
@@ -191,24 +100,17 @@ void loop()
 		pLatCharacteristic->setValue(LTM_reader::uav_lat);
 		pLonCharacteristic->setValue(LTM_reader::uav_lon);
 		pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
-		pConnCharacteristic->setValue(&loraConnected, 1);
 		pLatCharacteristic->notify();
 		pLonCharacteristic->notify();
 		pSatsCharacteristic->notify();
-		pConnCharacteristic->notify();
 		// Serial.println();
 		availableLoraBytes = 0;
 	}
 
-	if((millis() - lastLoraReceived) > LORA_RX_TIMEOUT)
+	if ((millis() - lastLoraReceived) > LORA_RX_TIMEOUT)
 	{
 		//timeout
 		loraConnected = false;
-	}
-	else
-	{
-		//correct receiving
-		loraConnected = true;
 	}
 
 	digitalWrite(LED_BUILTIN, loraConnected);
@@ -218,4 +120,5 @@ void onLoraReceive(int bytes)
 {
 	availableLoraBytes = bytes;
 	lastLoraReceived = millis();
+	loraConnected = true;
 }
