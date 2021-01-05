@@ -4,11 +4,11 @@
 #include <Arduino.h>
 #include <LoRa.h>
 
-#define LORA_FREQ 868E6
-#define LORA_TX_POWER 20
+#define LORA_FREQ 433E6
+#define LORA_TX_POWER 17
 #define LORA_BANDWIDTH 62.5E3
 #define LORA_CODING_RATE 5
-#define LORA_SPREADING_FACTOR 12
+#define LORA_SPREADING_FACTOR 11
 
 #define MAX_LORA_PACKET_SIZE 100
 #define LORA_RX_TIMEOUT 10000

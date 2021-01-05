@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <LightTelemetry.h>
-#include <LoRa.h>
+#include "Lora/lora.hpp"
 #include "ble/ble.hpp"
 #include "ota/ota.hpp"
 
@@ -10,28 +10,12 @@ const char *hostname = "LoraLTM_Receiver";
 
 #define UPDATE_PERIOD 1000
 
-#define LORA_FREQ 868E6
-#define LORA_TX_POWER 20
-#define LORA_BANDWIDTH 62.5E3
-#define LORA_CODING_RATE 5
-#define LORA_SPREADING_FACTOR 12
-
 double latitude = 43.885699;
 double longitude = 13.353804;
 uint8_t sats = 5;
 
-#define MAX_LORA_PACKET_SIZE 100
-#define LORA_RX_TIMEOUT 10000
-uint8_t loraRxBuffer[MAX_LORA_PACKET_SIZE];
-uint8_t loraRxBytes;
-int availableLoraBytes = 0;
-uint32_t lastLoraReceived = 0;
-uint8_t loraConnected = false;
-
 uint32_t timer = 0;
 uint8_t start_retry_count = 0;
-
-void onLoraReceive(int bytes);
 
 void setup()
 {
@@ -62,17 +46,7 @@ void setup()
 
 	BLE_setup(hostname);
 
-	LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
-	LoRa.begin(LORA_FREQ);
-	LoRa.sleep();
-	LoRa.enableCrc();
-	LoRa.setTxPower(LORA_TX_POWER, PA_OUTPUT_PA_BOOST_PIN);
-	LoRa.setSignalBandwidth(LORA_BANDWIDTH);
-	LoRa.setCodingRate4(LORA_CODING_RATE);
-	LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
-	LoRa.idle();
-	LoRa.onReceive(onLoraReceive);
-	LoRa.receive();
+	LORA_setup();
 
 	delay(1000);
 }
@@ -91,19 +65,16 @@ void loop()
 	if (availableLoraBytes > 0)
 	{
 		loraRxBytes = LoRa.readBytes(loraRxBuffer, availableLoraBytes <= MAX_LORA_PACKET_SIZE ? availableLoraBytes : MAX_LORA_PACKET_SIZE);
-		// Serial.print("RSSI: ");
-		// Serial.print(157 - constrain(LoRa.packetRssi() * -1, 0, 157));
-		// Serial.print(" SNR: ");
-		// Serial.println(LoRa.packetSnr());
 		Serial.write(loraRxBuffer, loraRxBytes);
 		LTM_reader::read(loraRxBuffer, loraRxBytes);
 		pLatCharacteristic->setValue(LTM_reader::uav_lat);
 		pLonCharacteristic->setValue(LTM_reader::uav_lon);
 		pSatsCharacteristic->setValue(&LTM_reader::uav_satellites_visible, 1);
+		pRssiCharacteristic->setValue(LoRa.packetRssi());
 		pLatCharacteristic->notify();
 		pLonCharacteristic->notify();
 		pSatsCharacteristic->notify();
-		// Serial.println();
+		pRssiCharacteristic->notify();
 		availableLoraBytes = 0;
 	}
 
@@ -116,9 +87,3 @@ void loop()
 	digitalWrite(LED_BUILTIN, loraConnected);
 }
 
-void onLoraReceive(int bytes)
-{
-	availableLoraBytes = bytes;
-	lastLoraReceived = millis();
-	loraConnected = true;
-}

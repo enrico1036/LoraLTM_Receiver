@@ -42,6 +42,9 @@ class MyCallbacks : public NimBLECharacteristicCallbacks
 
 void BLE_setup(const std::string &deviceName)
 {
+
+	NimBLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
+	
 	// Create the BLE Device
 	NimBLEDevice::init(deviceName);
 
@@ -78,7 +81,7 @@ void BLE_setup(const std::string &deviceName)
 	// pConnCharacteristic->addDescriptor(new BLE2902());
 
 	pRssiCharacteristic = pService->createCharacteristic(
-		CHARACTERISTIC_UUID_CONN,
+		CHARACTERISTIC_UUID_RSSI,
 		NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
 
 	// pRssiCharacteristic->addDescriptor(new BLE2902());
